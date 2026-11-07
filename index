@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="pl">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dąbska Home</title></head>
+<body style="font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px;">
+<h1>Dąbska Home</h1>
+<p>Prywatna instalacja Home Assistant jednej rodziny. Połączenie z Kalendarzem Google
+służy wyłącznie do wyświetlania i dodawania wydarzeń rodzinnych (szkoła, biblioteka, zajęcia).</p>
+<p>A private, single-family Home Assistant setup. Its Google Calendar connection only shows and adds
+the family's own events.</p>
+<p><a href="privacy.html">Polityka prywatności / Privacy policy</a></p>
+</body>
+</html>
