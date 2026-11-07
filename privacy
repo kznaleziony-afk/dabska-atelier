@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="pl">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Polityka prywatności</title></head>
+<body style="font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px;">
+<h1>Polityka prywatności</h1>
+<p>Ta aplikacja to prywatna instalacja Home Assistant używana przez jedną rodzinę. Nie jest udostępniana
+innym osobom.</p>
+<ul>
+  <li>Dostęp do Kalendarza Google służy tylko do wyświetlania wydarzeń w Home Assistant oraz dodawania
+      i usuwania wydarzeń rodzinnych (szkoła, biblioteka, zajęcia).</li>
+  <li>Dane z kalendarza są przechowywane wyłącznie na domowym serwerze Home Assistant i nie są
+      nikomu przekazywane ani sprzedawane.</li>
+  <li>Dostęp można w każdej chwili cofnąć na stronie myaccount.google.com/permissions.</li>
+</ul>
+<h2>Privacy policy (English)</h2>
+<p>This is a private Home Assistant installation used by one family and not offered to anyone else.
+Google Calendar access is used only to show events in Home Assistant and to add or remove the family's own
+events. Calendar data stays on the home Home Assistant server and is never shared or sold. Access can be
+revoked at any time at myaccount.google.com/permissions.</p>
+<p>Kontakt / Contact: kznaleziony@gmail.com</p>
+</body>
+</html>
