@@ -1,0 +1,276 @@
+# Car wash approval flow (Home Assistant package)
+#
+# Logic:
+#   1. A "dirt score" grows every hour it rains/snows (x1.5 in salty months Nov-Mar).
+#   2. Every morning at 08:00 the car is "due" if:
+#        days since last wash >= max days (30)   -> monthly minimum
+#        OR dirt score >= threshold (10)          -> dirty weather, wash sooner
+#      and at least min days (7) passed since the last wash.
+#   3. Pick the first day in the next 5 days (no Sundays) with a dry, above-freezing
+#      forecast and a free family calendar between 09:00 and 17:00.
+#   4. Send an actionable notification: Book / Skip. Nothing is booked without a tap.
+#   5. On "Book" run script.book_car_wash, reset the dirt score, send confirmation.
+#
+# CHANGE ME before use (search for "CHANGE ME"):
+#   weather.home                 -> your weather entity
+#   calendar.family              -> your family calendar entity
+#   notify.mobile_app_phone      -> your phone's notify service
+#   script.book_car_wash         -> adjust the field names in the "data:" block
+#
+# Enable packages in configuration.yaml:
+#   homeassistant:
+#     packages: !include_dir_named packages
+
+input_datetime:
+  carwash_last:
+    name: Car wash - last wash
+    has_date: true
+    has_time: false
+  carwash_last_asked:
+    name: Car wash - last asked
+    has_date: true
+    has_time: false
+
+input_text:
+  carwash_proposed:
+    name: Car wash - proposed date (YYYY-MM-DD)
+    max: 10
+    initial: ""
+
+input_number:
+  carwash_dirt:
+    name: Car wash - dirt score
+    min: 0
+    max: 30
+    step: 0.1
+    mode: box
+  carwash_dirt_threshold:
+    name: Car wash - dirt threshold
+    min: 3
+    max: 30
+    step: 0.5
+    initial: 10
+    mode: box
+  carwash_max_days:
+    name: Car wash - max days between washes
+    min: 14
+    max: 60
+    step: 1
+    initial: 30
+    mode: box
+  carwash_min_days:
+    name: Car wash - min days between washes
+    min: 3
+    max: 21
+    step: 1
+    initial: 7
+    mode: box
+
+automation:
+  # ---- 1. Dirt score grows while it rains / snows -------------------------
+  - id: carwash_accumulate_dirt
+    alias: Car wash - accumulate dirt from weather
+    mode: single
+    triggers:
+      - trigger: time_pattern
+        minutes: "0"
+    variables:
+      weather: weather.home # CHANGE ME
+      increment: >-
+        {% set base = {
+             'rainy': 0.2, 'pouring': 0.4, 'snowy': 0.4,
+             'snowy-rainy': 0.5, 'lightning-rainy': 0.4, 'hail': 0.3
+           }.get(states(weather), 0) %}
+        {% set salt = 1.5 if now().month in [11, 12, 1, 2, 3] else 1.0 %}
+        {{ base * salt }}
+    conditions:
+      - condition: template
+        value_template: "{{ increment | float(0) > 0 }}"
+    actions:
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.carwash_dirt
+        data:
+          value: >-
+            {{ [states('input_number.carwash_dirt') | float(0) + increment | float(0), 30] | min }}
+
+  # ---- 2. Morning check, propose a wash -----------------------------------
+  - id: carwash_propose
+    alias: Car wash - propose a booking
+    mode: single
+    triggers:
+      - trigger: time
+        at: "08:00:00"
+    variables:
+      weather: weather.home # CHANGE ME
+      calendar: calendar.family # CHANGE ME
+      days_since_wash: >-
+        {{ (now().date() - (states('input_datetime.carwash_last') | as_datetime).date()).days }}
+      days_since_asked: >-
+        {{ (now().date() - (states('input_datetime.carwash_last_asked') | as_datetime).date()).days }}
+      dirt: "{{ states('input_number.carwash_dirt') | float(0) }}"
+      reason: >-
+        {% if days_since_wash | int >= states('input_number.carwash_max_days') | int %}
+          minął miesiąc od ostatniego mycia ({{ days_since_wash }} dni)
+        {% elif dirt >= states('input_number.carwash_dirt_threshold') | float(10) %}
+          deszczowa/śnieżna pogoda (poziom brudu {{ dirt | round(1) }})
+        {% endif %}
+    conditions:
+      # Valid dates only (helpers start at unknown/unavailable).
+      - condition: template
+        value_template: "{{ states('input_datetime.carwash_last') not in ['unknown', 'unavailable'] }}"
+      - condition: template
+        value_template: "{{ states('input_datetime.carwash_last_asked') not in ['unknown', 'unavailable'] }}"
+      - condition: template
+        value_template: "{{ reason | trim | length > 0 }}"
+      - condition: template
+        value_template: "{{ days_since_wash | int >= states('input_number.carwash_min_days') | int }}"
+      # Don't nag more often than every 2 days.
+      - condition: template
+        value_template: "{{ days_since_asked | int >= 2 }}"
+    actions:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.carwash_proposed
+        data:
+          value: ""
+      - action: weather.get_forecasts
+        target:
+          entity_id: "{{ weather }}"
+        data:
+          type: daily
+        response_variable: fc
+      - repeat:
+          for_each: [1, 2, 3, 4, 5]
+          sequence:
+            - variables:
+                day: "{{ (now() + timedelta(days=repeat.item)).date() }}"
+                forecast: >-
+                  {% set ns = namespace(f=none) %}
+                  {% for f in fc[weather].forecast %}
+                    {% if f.datetime[:10] == (now() + timedelta(days=repeat.item)).date() | string %}
+                      {% set ns.f = f %}
+                    {% endif %}
+                  {% endfor %}
+                  {{ ns.f }}
+            - condition: template
+              value_template: "{{ states('input_text.carwash_proposed') == '' }}"
+            - condition: template
+              value_template: >-
+                {{ forecast is not none
+                   and day.weekday() != 6
+                   and forecast.condition not in
+                       ['rainy', 'pouring', 'snowy', 'snowy-rainy', 'lightning-rainy', 'hail']
+                   and (forecast.precipitation_probability | default(0) | int(0)) < 40
+                   and (forecast.templow | default(forecast.temperature) | float(0)) > 0 }}
+            - action: calendar.get_events
+              target:
+                entity_id: "{{ calendar }}"
+              data:
+                start_date_time: "{{ day }} 09:00:00"
+                end_date_time: "{{ day }} 17:00:00"
+              response_variable: cal
+            - condition: template
+              value_template: "{{ cal[calendar].events | length == 0 }}"
+            - action: input_text.set_value
+              target:
+                entity_id: input_text.carwash_proposed
+              data:
+                value: "{{ day }}"
+      # No suitable day found -> stay quiet, we retry tomorrow at 08:00.
+      - condition: template
+        value_template: "{{ states('input_text.carwash_proposed') != '' }}"
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.carwash_last_asked
+        data:
+          date: "{{ now().date() }}"
+      - action: notify.mobile_app_phone # CHANGE ME
+        data:
+          title: "Czas umyć auto 🚗"
+          message: >-
+            Powód: {{ reason | trim }}.
+            Proponuję {{ states('input_text.carwash_proposed') }}
+            — pogoda sucha, kalendarz wolny 9:00–17:00.
+          data:
+            tag: carwash
+            actions:
+              - action: CARWASH_APPROVE
+                title: "Zarezerwuj"
+              - action: CARWASH_SKIP
+                title: "Pomiń"
+
+  # ---- 3. Handle the button tap -------------------------------------------
+  - id: carwash_handle_response
+    alias: Car wash - handle approval
+    mode: single
+    triggers:
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: CARWASH_APPROVE
+        id: approve
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: CARWASH_SKIP
+        id: skip
+    actions:
+      - choose:
+          - conditions:
+              - condition: trigger
+                id: skip
+            sequence:
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.carwash_proposed
+                data:
+                  value: ""
+              - action: notify.mobile_app_phone # CHANGE ME
+                data:
+                  message: "Pominięto. Zapytam ponownie za 2 dni."
+                  data:
+                    tag: carwash
+          - conditions:
+              - condition: trigger
+                id: approve
+            sequence:
+              # Stale or missing proposal -> don't book.
+              - if:
+                  - condition: template
+                    value_template: >-
+                      {{ states('input_text.carwash_proposed') == ''
+                         or states('input_text.carwash_proposed') < now().date() | string }}
+                then:
+                  - action: notify.mobile_app_phone # CHANGE ME
+                    data:
+                      message: "Propozycja wygasła. Dostaniesz nową rano."
+                      data:
+                        tag: carwash
+                  - stop: "Proposal expired"
+              - variables:
+                  wash_date: "{{ states('input_text.carwash_proposed') }}"
+              - action: script.book_car_wash # CHANGE ME: match your script's fields
+                data:
+                  date: "{{ wash_date }}"
+                continue_on_error: true
+              - action: input_datetime.set_datetime
+                target:
+                  entity_id: input_datetime.carwash_last
+                data:
+                  date: "{{ wash_date }}"
+              - action: input_number.set_value
+                target:
+                  entity_id: input_number.carwash_dirt
+                data:
+                  value: 0
+              - action: input_text.set_value
+                target:
+                  entity_id: input_text.carwash_proposed
+                data:
+                  value: ""
+              - action: notify.mobile_app_phone # CHANGE ME
+                data:
+                  message: "Zlecono rezerwację mycia na {{ wash_date }}. Sprawdź potwierdzenie."
+                  data:
+                    tag: carwash
